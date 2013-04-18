@@ -95,6 +95,10 @@ namespace std {
 #   include <cxxabi.h>
 #endif
 
+#ifdef __APPLE__
+#  include <mach-o/dyld.h>
+#endif
+
 // messages
 
 #ifdef _MSC_VER
@@ -461,26 +465,32 @@ namespace tracey
 #endif
         })
         $apple({
+            char buf[16384];
+            uint32_t size = sizeof(buf);
+            if (_NSGetExecutablePath(buf, &size)) return name;
+            
             // format: number  filename  address  funcname + offset
             // find beginning and end of function name
-            const char *b = name.data();
+            const char *b = name.data(), *e;
+            std::string addr;
             for (; *b == ' '; ++b);      // skip to first non-space char
             for (int i=0; i<3; ++i) {
-                for (; *b != ' '; ++b);  // skip to end of this word
-                for (; *b == ' '; ++b);  // skip to beginning of next word
+                for (e=b; *e != ' '; ++e);  // skip to end of this word
+                if (i==2)
+                    addr  = std::string(b, e-b);
+                for (b=e; *b == ' '; ++b);  // skip to beginning of next word
             }
-            char* e = strrchr((char*) b, '+'); // look for last '+'
+            e = strrchr((char*) b, '+'); // look for last '+'
             if (!e || e<=b || *--e != ' ') return name; // abort if bad format
-            static size_t alloc_size = 1024;
-            static std::unique_ptr<char, void (*)(void*)> demangled((char*) std::malloc(alloc_size), &std::free);
-            size_t sz = alloc_size;
-            int status;
-            *e = '\0';  // terminate string for __cxa_demangle
-            abi::__cxa_demangle(b, demangled.get(), &sz, &status);
-            *e = ' ';   // restore original
-            if (sz>alloc_size) alloc_size = sz; // update alloc_size if __cxa_demangle called realloc
-            return status ? name :
-            std::string(name.data(), b - name.data()) + std::string(demangled.get()) + std::string(e);
+            
+            std::string cmd = std::string("atos -o ") + buf + " " + addr;
+            FILE *fp = popen(cmd.c_str(), "r");
+            if (!fp) { return name; }
+            fgets(buf, sizeof(buf), fp);
+            pclose(fp);
+            std::string result(buf);
+            result.pop_back(); //remove \n
+            return result;
         })
         $windows({
         char demangled[1024];
